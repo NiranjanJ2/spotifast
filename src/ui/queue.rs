@@ -105,14 +105,8 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
             app.actions.push(Action::SaveQueueAsPlaylist);
         }
         ui.add_space(8.0);
-        // Lazy load recents when tab becomes visible.
-        if app.queue_tab == QueueTab::Recents
-            && !app.recents.loading
-            && !app.recents.complete
-            && app.recents.items.is_empty()
-            && app.recents.error.is_none()
-        {
-            app.actions.push(Action::LoadMoreRecents);
+        if app.queue_tab == QueueTab::Recents {
+            load_recents_once(app);
         }
         crate::autoscroll::show(
             ui,
@@ -122,7 +116,7 @@ pub fn side_panel(app: &mut App, ui: &mut egui::Ui) {
             egui::Vec2b::new(false, true),
             |ui| match app.queue_tab {
                 QueueTab::Queue => contents(app, ui, true),
-                QueueTab::Recents => recents_contents(app, ui),
+                QueueTab::Recents => recents_contents(app, ui, true),
             },
         );
     });
@@ -446,7 +440,19 @@ fn queue_is_empty(app: &App) -> bool {
     app.queue.get().is_none_or(|queue| queue.queue.is_empty())
 }
 
-fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
+/// Lazy load recents the first time a view that shows them is visible.
+pub(super) fn load_recents_once(app: &mut App) {
+    if app.network_reachable
+        && !app.recents.loading
+        && !app.recents.complete
+        && app.recents.items.is_empty()
+        && app.recents.error.is_none()
+    {
+        app.actions.push(Action::LoadMoreRecents);
+    }
+}
+
+pub(super) fn recents_contents(app: &mut App, ui: &mut egui::Ui, compact: bool) {
     let palette = app.palette;
     // Snapshot to avoid borrow issues while drawing. The rows are both
     // histories as one: what was played here, which Spotify is never told
@@ -515,7 +521,11 @@ fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(6.0);
     }
 
-    let row_height = theme::COMPACT_ROW_HEIGHT;
+    let row_height = if compact {
+        theme::COMPACT_ROW_HEIGHT
+    } else {
+        theme::ROW_HEIGHT
+    };
     // Build PlayableItems on the fly; virtual_rows needs stable index.
     widgets::virtual_rows(ui, items.len(), row_height, |ui, index| {
         let entry = &items[index];
@@ -535,7 +545,7 @@ fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
                 added_at: entry.played_at.as_deref(),
                 added_by: None,
                 show_added_by: false,
-                compact: true,
+                compact,
                 thin: false,
                 shift: 0.0,
                 picked: false,
@@ -548,7 +558,7 @@ fn recents_contents(app: &mut App, ui: &mut egui::Ui) {
     if loading {
         ui.add_space(8.0);
         widgets::loading_row(ui, &palette, app.locale);
-    } else if !complete {
+    } else if !complete && app.network_reachable {
         ui.add_space(8.0);
         // Auto-load when near end, plus manual button as fallback.
         let can_load = app.recents.can_load_more();

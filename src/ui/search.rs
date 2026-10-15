@@ -83,46 +83,66 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 fn recent(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.add_space(6.0);
-    if !app.network_reachable && app.settings.search_history.is_empty() {
-        widgets::empty_state(
-            ui,
-            &palette,
-            Icon::WifiOff,
-            &gettext(app.locale, "You're offline"),
-            &gettext(
-                app.locale,
-                "Connect to the internet to search songs, artists, and playlists.",
-            ),
-        );
-        return;
-    }
-    if app.settings.search_history.is_empty() {
-        widgets::empty_state(
-            ui,
-            &palette,
-            Icon::Search,
-            &gettext(app.locale, "Search Spotify"),
-            &gettext(
-                app.locale,
-                "Find songs, artists, albums, playlists, and podcasts.",
-            ),
-        );
-        return;
-    }
-    theme::section_title(ui, &palette, &gettext(app.locale, "Recent searches"));
-    ui.add_space(6.0);
-    let history = app.settings.search_history.clone();
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-        for query in &history {
-            let (response, forget) = theme::soft_button_dismiss(ui, &palette, Icon::Clock, query);
-            if forget {
-                app.actions.push(Action::ForgetSearch(query.clone()));
-            } else if response.clicked() {
-                app.actions.push(Action::Search(query.clone()));
-            }
+    super::queue::load_recents_once(app);
+    if app.settings.search_history.is_empty()
+        && app.recents_view.is_empty()
+        && !app.recents.loading
+        && app.recents.error.is_none()
+        && (app.recents.loaded_once || !app.network_reachable)
+    {
+        if app.network_reachable {
+            widgets::empty_state(
+                ui,
+                &palette,
+                Icon::Search,
+                &gettext(app.locale, "Search Spotify"),
+                &gettext(
+                    app.locale,
+                    "Find songs, artists, albums, playlists, and podcasts.",
+                ),
+            );
+        } else {
+            widgets::empty_state(
+                ui,
+                &palette,
+                Icon::WifiOff,
+                &gettext(app.locale, "You're offline"),
+                &gettext(
+                    app.locale,
+                    "Connect to the internet to search songs, artists, and playlists.",
+                ),
+            );
         }
-    });
+    } else if !app.settings.search_history.is_empty() {
+        theme::section_title(ui, &palette, &gettext(app.locale, "Recent searches"));
+        ui.add_space(6.0);
+        let history = app.settings.search_history.clone();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+            for query in &history {
+                let (response, forget) =
+                    theme::soft_button_dismiss(ui, &palette, Icon::Clock, query);
+                if forget {
+                    app.actions.push(Action::ForgetSearch(query.clone()));
+                } else if response.clicked() {
+                    app.actions.push(Action::Search(query.clone()));
+                }
+            }
+        });
+    }
+    // The queue's Recents tab content: merged local and Spotify history, same
+    // rows and paging. Its own empty state is skipped, the prompt above fills
+    // an empty page.
+    if !app.recents_view.is_empty()
+        || app.recents.loading
+        || app.recents.error.is_some()
+        || (app.network_reachable && !app.recents.loaded_once)
+    {
+        ui.add_space(16.0);
+        theme::section_title(ui, &palette, &gettext(app.locale, "Recently played"));
+        ui.add_space(6.0);
+        super::queue::recents_contents(app, ui, false);
+    }
 }
 
 fn all(app: &mut App, ui: &mut egui::Ui, results: &SearchResults) {
