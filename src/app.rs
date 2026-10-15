@@ -416,6 +416,11 @@ pub struct App {
     pub home: HomeData,
     /// Local play history. See [`crate::history`].
     pub plays: crate::history::History,
+    /// Songs played from Search results, for the empty Search page. Kept
+    /// in `search_plays_file`, apart from `plays`.
+    search_plays_store: crate::history::History,
+    /// The same songs as `search_plays_store`, most recent first.
+    pub search_plays: Vec<crate::api::models::PlayHistory>,
     /// Writes settings, session and history off the UI thread.
     files: fastframe_file::Writer,
     /// Current track timing used to decide when a play counts.
@@ -788,6 +793,10 @@ impl App {
         // settings beside it until migration binds that password in the store.
         settings.proxy_password_legacy |= dirs.proxy_secret_file().try_exists().unwrap_or(true);
         let plays = crate::history::History::load(&dirs.history_file());
+        // Starts empty on an existing profile: history.json does not say
+        // which plays came from Search.
+        let search_plays_store = crate::history::History::load(&dirs.search_plays_file());
+        let search_plays = search_plays_store.plays().to_vec();
         let tap = crate::vis::AudioTap::new();
         let eq = crate::eq::shared();
         if let Ok(mut shared) = eq.lock() {
@@ -957,6 +966,8 @@ impl App {
             liked_recheck_at: None,
             home: HomeData::default(),
             plays,
+            search_plays_store,
+            search_plays,
             files: fastframe_file::Writer::new(),
             listening: None,
             recents: crate::model::CursorList::default(),
@@ -7936,6 +7947,33 @@ impl App {
     /// With `shuffle_first`, shuffle is turned on before playback starts,
     /// in one ordered exchange: two independent requests race, and shuffle
     /// sometimes lost.
+    /// The songs of the search results on screen, if the Search page shows
+    /// them.
+    fn search_tracks(&self) -> Option<&[crate::api::models::Track]> {
+        if !matches!(self.page(), Page::Search) || self.search.committed.is_empty() {
+            return None;
+        }
+        let page = self.search.results.get()?.tracks.as_ref()?;
+        Some(&page.items)
+    }
+
+    /// Remembers a song chosen from the search results. Recorded when the
+    /// play is asked for: a play that then fails is still listed.
+    fn record_search_play(&mut self, uri: &str) {
+        let Some(track) = self
+            .search_tracks()
+            .and_then(|tracks| tracks.iter().find(|track| track.uri == uri))
+            .cloned()
+        else {
+            return;
+        };
+        self.search_plays_store
+            .record_unique(track, jiff::Timestamp::now());
+        self.search_plays_store
+            .save(&self.files, &self.dirs.search_plays_file());
+        self.search_plays = self.search_plays_store.plays().to_vec();
+    }
+
     fn play_request(&mut self, request: PlayRequest, shuffle_first: bool) {
         // Whatever starts now outranks a play-search still in flight.
         self.supersede_play_search();
@@ -9560,6 +9598,10 @@ impl App {
                 if uris.is_empty() {
                     return;
                 }
+                // The Top result's play button hands over just its song.
+                if let [uri] = uris.as_slice() {
+                    self.record_search_play(uri);
+                }
                 let (uris, index) = cap_uris(&uris, index);
                 let request = PlayRequest::tracks(uris).starting_at_index(index);
                 self.play_request(request, false);
@@ -9599,6 +9641,29 @@ impl App {
                             .position(|held| *held == uri)
                             .map_or(index, |position| position as u32)
                     };
+                    // A Songs row hands over exactly the search's songs. A
+                    // Recent row or another list does not match them.
+                    let from_search = self
+                        .search_tracks()
+                        .is_some_and(|tracks| tracks.iter().map(|t| &t.uri).eq(uris.iter()));
+                    if from_search {
+                        self.record_search_play(&uri);
+                    } else if matches!(self.page(), Page::Search)
+                        && self.search.committed.is_empty()
+                        && uris.len() == 1
+                        && let Some(track) = self
+                            .search_plays
+                            .iter()
+                            .find(|play| play.track.uri == uri)
+                            .map(|play| play.track.clone())
+                    {
+                        // Replaying a song from this very list moves it to the top.
+                        self.search_plays_store
+                            .record_unique(track, jiff::Timestamp::now());
+                        self.search_plays_store
+                            .save(&self.files, &self.dirs.search_plays_file());
+                        self.search_plays = self.search_plays_store.plays().to_vec();
+                    }
                     let (uris, index) = cap_uris(uris.as_ref(), index);
                     let request = PlayRequest::tracks(uris).starting_at_index(index);
                     self.play_request(request, false);
@@ -10498,6 +10563,10 @@ impl App {
             Action::ClearPlayHistory => {
                 self.plays.clear();
                 self.plays.save(&self.files, &self.dirs.history_file());
+                self.search_plays_store.clear();
+                self.search_plays_store
+                    .save(&self.files, &self.dirs.search_plays_file());
+                self.search_plays.clear();
                 self.rebuild_recents();
                 self.toast(gettext(self.locale, "Play history cleared"));
             }
@@ -14522,6 +14591,86 @@ mod tests {
                 .len(),
             1
         );
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(app.dirs.config.parent().unwrap());
+    }
+
+    /// Only songs chosen from the Search results are kept for the empty
+    /// Search page: a repeat moves to the top, other plays are not listed,
+    /// and the list comes back after a restart.
+    #[test]
+    fn search_plays_keep_only_chosen_search_songs() {
+        let ctx = egui::Context::default();
+        let mut app = headless_app();
+        let track = |uri: &str| crate::api::models::Track {
+            uri: uri.into(),
+            ..Default::default()
+        };
+        let uris = ["spotify:track:a", "spotify:track:b"];
+        app.search.results = Loadable::Loaded(SearchResults {
+            tracks: Some(crate::api::models::Page {
+                items: uris.iter().map(|uri| track(uri)).collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let row = |uri: &str, index: u32, list: &[&str]| Action::PlayFromRow {
+            context: RowContext::Uris(
+                list.iter()
+                    .map(|u| u.to_string())
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+            uri: uri.into(),
+            index,
+        };
+        let listed = |app: &App| -> Vec<String> {
+            app.search_plays
+                .iter()
+                .map(|p| p.track.uri.clone())
+                .collect()
+        };
+
+        // Off the Search page nothing is listed.
+        app.apply(row("spotify:track:a", 0, &uris), &ctx);
+        assert!(listed(&app).is_empty());
+
+        app.open(Page::Search);
+        app.search.committed = "song".into();
+        // A list that is not the search's songs (a Recent row) is not listed.
+        app.apply(row("spotify:track:a", 0, &["spotify:track:a"]), &ctx);
+        assert!(listed(&app).is_empty());
+        // A song that is not in the results is not listed.
+        app.apply(
+            Action::PlayUris {
+                uris: vec!["spotify:track:z".into()],
+                index: 0,
+            },
+            &ctx,
+        );
+        assert!(listed(&app).is_empty());
+
+        app.apply(row("spotify:track:a", 0, &uris), &ctx);
+        // The Top result's play button.
+        app.apply(
+            Action::PlayUris {
+                uris: vec!["spotify:track:b".into()],
+                index: 0,
+            },
+            &ctx,
+        );
+        app.apply(row("spotify:track:a", 0, &uris), &ctx);
+        assert_eq!(listed(&app), ["spotify:track:a", "spotify:track:b"]);
+
+        app.search.committed.clear();
+        app.apply(row("spotify:track:b", 0, &["spotify:track:b"]), &ctx);
+        assert_eq!(listed(&app), ["spotify:track:b", "spotify:track:a"]);
+
+        // The ordinary play history is untouched, and the list persists.
+        assert!(app.plays.is_empty());
+        assert!(app.flush_files());
+        let stored = crate::history::History::load(&app.dirs.search_plays_file());
+        assert_eq!(stored.plays().len(), 2);
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(app.dirs.config.parent().unwrap());
     }

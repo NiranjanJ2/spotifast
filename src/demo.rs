@@ -491,6 +491,7 @@ pub fn populate(app: &mut App) {
         })
         .collect();
     app.recents_view = crate::history::merged(app.plays.plays(), &app.recents.items);
+    app.search_plays = app.recents.items.iter().take(8).cloned().collect();
     app.recents.loaded_once = true;
     app.recents.loading = false;
     app.recents.error = None;
@@ -2982,9 +2983,8 @@ mod tests {
         app.open(Page::Search);
         app.search.query.clear();
         app.search.committed.clear();
-        app.recents_view = app.recents.items.clone();
-        app.recents.complete = true;
-        let item = PlayableItem::Track(app.recents_view[0].track.clone());
+        app.search_plays = app.recents.items.clone();
+        let item = PlayableItem::Track(app.search_plays[0].track.clone());
         accessible_frame(&ctx, &mut app, vec![]);
         let tree = accessible_frame(&ctx, &mut app, vec![]);
         let label = format!("Play {}, {}", item.name(), item.subtitle());

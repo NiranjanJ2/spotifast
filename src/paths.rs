@@ -67,6 +67,13 @@ impl AppDirs {
         self.state.join("history.json")
     }
 
+    /// Songs deliberately played from Search results, most recent first.
+    /// Separate from `history.json`, which has no record of where a play
+    /// came from.
+    pub fn search_plays_file(&self) -> PathBuf {
+        self.state.join("search_plays.json")
+    }
+
     pub fn shared_web_token_file(&self) -> PathBuf {
         self.state.join("shared_web_api_token.json")
     }

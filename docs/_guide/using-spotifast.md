@@ -483,10 +483,16 @@ Settings under **Playback on this computer**.
 
 ## Recent
 
-The queue panel's second tab and the Search page, before you enter a query,
-show Spotify's history alongside tracks played through Spotifast, which
-Spotify does not record. On Search, each song has a heart for Liked Songs and
-a More menu with **Add to queue**.
+The queue panel's second tab shows Spotify's history alongside tracks played
+through Spotifast, which Spotify does not record.
+
+The Search page, before you enter a query, shows **Played from search**: songs
+you explicitly played from Spotifast search results. Each song appears once;
+playing it again moves it to the top. Songs that start through shuffle,
+autoplay, or recommendations do not enter this list. The list is stored locally
+and starts empty when upgrading, because older play history did not record how
+a song was started. Each row has a heart for Liked Songs and a More menu with
+**Add to queue**.
 
 Since 0.8.0, choosing any Recent row starts that song on its own,
 and the player bar shows the selection immediately while playback starts.

@@ -108,6 +108,13 @@ impl History {
         self.dirty = true;
     }
 
+    /// Writes down that `track` was chosen, newest first, once: an earlier
+    /// entry for the same song moves to the top.
+    pub fn record_unique(&mut self, track: Track, at: jiff::Timestamp) {
+        self.plays.retain(|play| play.track.uri != track.uri);
+        self.record(track, at);
+    }
+
     pub fn clear(&mut self) {
         if self.plays.is_empty() {
             return;
@@ -424,5 +431,28 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn track(uri: &str) -> Track {
+        Track {
+            uri: uri.into(),
+            ..Track::default()
+        }
+    }
+
+    /// A song chosen again moves to the top instead of repeating.
+    #[test]
+    fn a_chosen_song_is_listed_once_and_moves_to_the_top() {
+        let mut history = History::default();
+        let at = |s: &str| s.parse().unwrap();
+        history.record_unique(track("spotify:track:a"), at("2026-09-01T09:00:00Z"));
+        history.record_unique(track("spotify:track:b"), at("2026-09-01T09:01:00Z"));
+        history.record_unique(track("spotify:track:a"), at("2026-09-01T09:02:00Z"));
+        let uris: Vec<_> = history
+            .plays()
+            .iter()
+            .map(|p| p.track.uri.as_str())
+            .collect();
+        assert_eq!(uris, ["spotify:track:a", "spotify:track:b"]);
     }
 }

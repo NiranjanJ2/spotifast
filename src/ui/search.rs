@@ -83,13 +83,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 fn recent(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.add_space(6.0);
-    super::queue::load_recents_once(app);
-    if app.settings.search_history.is_empty()
-        && app.recents_view.is_empty()
-        && !app.recents.loading
-        && app.recents.error.is_none()
-        && (app.recents.loaded_once || !app.network_reachable)
-    {
+    if app.settings.search_history.is_empty() && app.search_plays.is_empty() {
         if app.network_reachable {
             widgets::empty_state(
                 ui,
@@ -130,18 +124,45 @@ fn recent(app: &mut App, ui: &mut egui::Ui) {
             }
         });
     }
-    // The queue's Recents tab content: merged local and Spotify history, same
-    // rows and paging. Its own empty state is skipped, the prompt above fills
-    // an empty page.
-    if !app.recents_view.is_empty()
-        || app.recents.loading
-        || app.recents.error.is_some()
-        || (app.network_reachable && !app.recents.loaded_once)
-    {
+    if !app.settings.search_history.is_empty() || !app.search_plays.is_empty() {
         ui.add_space(16.0);
-        theme::section_title(ui, &palette, &gettext(app.locale, "Recently played"));
+        theme::section_title(ui, &palette, &gettext(app.locale, "Played from search"));
         ui.add_space(6.0);
-        super::queue::recents_contents(app, ui, false);
+        let items = app.search_plays.clone();
+        if items.is_empty() {
+            theme::text(
+                ui,
+                gettext(app.locale, "Songs you play from search appear here."),
+                theme::regular(13.0),
+                palette.secondary,
+            );
+        } else {
+            widgets::virtual_rows(ui, items.len(), theme::ROW_HEIGHT, |ui, index| {
+                let entry = &items[index];
+                let item = PlayableItem::Track(entry.track.clone());
+                let context = RowContext::Uris(Arc::from([entry.track.uri.clone()]));
+                widgets::track_row(
+                    ui,
+                    app,
+                    TrackRow {
+                        index,
+                        number: None,
+                        item: &item,
+                        context: &context,
+                        show_cover: true,
+                        show_album: false,
+                        added_at: entry.played_at.as_deref(),
+                        added_by: None,
+                        show_added_by: false,
+                        compact: false,
+                        thin: false,
+                        shift: 0.0,
+                        picked: false,
+                        picked_songs: &[],
+                    },
+                );
+            });
+        }
     }
 }
 
